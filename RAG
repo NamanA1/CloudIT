@@ -1,0 +1,64 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer, util
+import openai
+import os
+import json
+from dotenv import load_dotenv
+
+# ✅ Load environment variables
+load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+app = FastAPI()
+
+# ✅ Load documents
+with open("documents.json", "r") as f:
+    documents = json.load(f)
+
+doc_texts = [doc["text"] for doc in documents]
+
+# ✅ Load sentence transformer model
+model = SentenceTransformer("all-MiniLM-L6-v2")
+doc_embeddings = model.encode(doc_texts, convert_to_tensor=True)
+
+# ✅ Request model
+class QueryRequest(BaseModel):
+    query: str
+
+# ✅ RAG endpoint
+@app.post("/rag")
+def rag_query(request: QueryRequest):
+    if not openai.api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured.")
+
+    try:
+        # Step 1: Embed query
+        query_embedding = model.encode(request.query, convert_to_tensor=True)
+
+        # Step 2: Find most similar document
+        scores = util.pytorch_cos_sim(query_embedding, doc_embeddings)[0]
+        best_idx = scores.argmax().item()
+        best_doc = doc_texts[best_idx]
+
+        # Step 3: Generate answer using OpenAI
+        prompt = f"Context: {best_doc}\n\nQuestion: {request.query}\nAnswer:"
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Use the context to answer the question concisely."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=100
+        )
+        answer = response.choices[0].message.content.strip()
+
+        return {
+            "query": request.query,
+            "matched_context": best_doc,
+            "answer": answer
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
