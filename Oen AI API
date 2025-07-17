@@ -1,0 +1,41 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import openai
+import os
+from dotenv import load_dotenv
+
+# ✅ Load environment variables
+load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+app = FastAPI()
+
+# ✅ Input model
+class SummaryRequest(BaseModel):
+    text: str
+
+# ✅ Output model
+class SummaryResponse(BaseModel):
+    summary: str
+
+# ✅ Summary endpoint
+@app.post("/generate-summary", response_model=SummaryResponse)
+def generate_summary(request: SummaryRequest):
+    if not openai.api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured.")
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Summarize the text concisely."},
+                {"role": "user", "content": request.text}
+            ],
+            max_tokens=100,
+            temperature=0.5,
+        )
+        summary = response.choices[0].message.content.strip()
+        return {"summary": summary}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
